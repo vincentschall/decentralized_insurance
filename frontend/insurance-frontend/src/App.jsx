@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import FarmersTab from "./components/FarmersTab";
 import InvestorsTab from "./components/InvestorsTab";
-import logo from "./logo.jpg";
+import logo from "./assets/logo.jpg";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("farmers");
