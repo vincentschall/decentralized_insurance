@@ -144,7 +144,7 @@ export default function App() {
         The Rainy Day Fund
       </h1>
       <p className="text-center text-gray-700 mb-8 max-w-2xl z-10">
-        Turning droughts into liquidity! Protect your farm or invest in resilience.
+        EVM-based decentralized weather index insurance. Transparent, fast and trustworthy. Protect your farm or invest in resilience!
       </p>
       
       {/* Tabs */}
