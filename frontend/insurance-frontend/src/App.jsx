@@ -87,23 +87,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-blue-50 via-white to-blue-50 relative overflow-hidden px-4">
-      {/* Background Waves */}
-      <div className="absolute top-0 left-0 w-full h-full -z-10">
-        <svg className="w-full h-full" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
-          <path
-            d="M0,160 C480,320 960,0 1440,160 L1440,0 L0,0 Z"
-            fill="#cce9f5"
-            opacity="0.5"
-          />
-          <path
-            d="M0,200 C480,100 960,300 1440,200 L1440,0 L0,0 Z"
-            fill="#2870ff"
-            opacity="0.2"
-          />
-        </svg>
-      </div>
-
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-blue-500 to-blue-200 relative overflow-hidden px-4">
       {/* Wallet Connection */}
       <div className="absolute top-4 right-4 z-10">
         {isConnected ? (
