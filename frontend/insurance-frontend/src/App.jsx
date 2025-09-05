@@ -37,7 +37,7 @@ export default function App() {
       />
 
       {/* Title */}
-      <h1 className="text-4xl md:text-5xl font-extrabold mb-2 text-center text-[#2596be] z-10">
+      <h1 className="text-4xl md:text-5xl font-extrabold mb-2 text-center text-[#2870ff] z-10">
         The Rainy Day Fund
       </h1>
       <p className="text-center text-gray-700 mb-8 max-w-2xl z-10">
