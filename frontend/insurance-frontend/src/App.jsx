@@ -22,7 +22,13 @@ export default function App() {
     }
 
     try {
-      // Request account access
+      // Force MetaMask to show account selector by requesting permissions
+      await window.ethereum.request({
+        method: "wallet_requestPermissions",
+        params: [{ eth_accounts: {} }],
+      });
+
+      // Then request accounts (this will now show the selector)
       const accounts = await window.ethereum.request({
         method: "eth_requestAccounts",
       });
@@ -60,29 +66,6 @@ export default function App() {
     setIsConnected(false);
   };
 
-  // Check if already connected on page load
-  useEffect(() => {
-    const checkConnection = async () => {
-      if (isMetaMaskInstalled()) {
-        try {
-          const accounts = await window.ethereum.request({
-            method: "eth_accounts",
-          });
-          
-          if (accounts.length > 0) {
-            setWalletAddress(accounts[0]);
-            setIsConnected(true);
-            await getBalance(accounts[0]);
-          }
-        } catch (error) {
-          console.error("Failed to check connection:", error);
-        }
-      }
-    };
-
-    checkConnection();
-  }, []);
-
   // Listen for account changes
   useEffect(() => {
     if (isMetaMaskInstalled()) {
@@ -115,7 +98,7 @@ export default function App() {
           />
           <path
             d="M0,200 C480,100 960,300 1440,200 L1440,0 L0,0 Z"
-            fill="#2596be"
+            fill="#2870ff"
             opacity="0.2"
           />
         </svg>
@@ -142,7 +125,7 @@ export default function App() {
         ) : (
           <button
             onClick={connectWallet}
-            className="bg-[#2596be] text-white px-4 py-2 rounded-lg shadow-lg hover:bg-blue-600 transition-colors font-semibold"
+            className="bg-[#2870ff] text-white px-4 py-2 rounded-lg shadow-lg hover:bg-blue-600 transition-colors font-semibold"
           >
             Connect Wallet
           </button>
@@ -157,7 +140,7 @@ export default function App() {
       />
       
       {/* Title */}
-      <h1 className="text-4xl md:text-5xl font-extrabold mb-2 text-center text-[#2596be] z-10">
+      <h1 className="text-4xl md:text-5xl font-extrabold mb-2 text-center text-[#2870ff] z-10">
         The Rainy Day Fund
       </h1>
       <p className="text-center text-gray-700 mb-8 max-w-2xl z-10">
@@ -169,8 +152,8 @@ export default function App() {
         <button
           className={`px-6 py-3 rounded-full font-semibold transition-all duration-300 shadow-md ${
             activeTab === "farmers"
-              ? "bg-[#2596be] text-white scale-105 shadow-lg"
-              : "bg-blue-100 text-[#2596be] hover:bg-[#2596be] hover:text-white"
+              ? "bg-[#2870ff] text-white scale-105 shadow-lg"
+              : "bg-blue-100 text-[#2870ff] hover:bg-[#2870ff] hover:text-white"
           }`}
           onClick={() => setActiveTab("farmers")}
         >
@@ -179,8 +162,8 @@ export default function App() {
         <button
           className={`px-6 py-3 rounded-full font-semibold transition-all duration-300 shadow-md ${
             activeTab === "investors"
-              ? "bg-[#2596be] text-white scale-105 shadow-lg"
-              : "bg-blue-100 text-[#2596be] hover:bg-[#2596be] hover:text-white"
+              ? "bg-[#2870ff] text-white scale-105 shadow-lg"
+              : "bg-blue-100 text-[#2870ff] hover:bg-[#2870ff] hover:text-white"
           }`}
           onClick={() => setActiveTab("investors")}
         >
