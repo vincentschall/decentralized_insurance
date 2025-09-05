@@ -124,10 +124,10 @@ export default function App() {
       />
       
       {/* Title */}
-      <h1 className="text-4xl md:text-5xl font-extrabold mb-2 text-center text-[#2870ff] z-10">
+      <h1 className="text-4xl md:text-5xl font-extrabold mb-2 text-center text-white z-10">
         The Rainy Day Fund
       </h1>
-      <p className="text-center text-gray-700 mb-8 max-w-2xl z-10">
+      <p className="text-center text-white mb-8 max-w-2xl z-10">
         EVM-based decentralized weather index insurance. Transparent, fast and trustworthy. Protect your farm or invest in resilience!
       </p>
       
@@ -136,8 +136,8 @@ export default function App() {
         <button
           className={`px-6 py-3 rounded-full font-semibold transition-all duration-300 shadow-md ${
             activeTab === "farmers"
-              ? "bg-[#2870ff] text-white scale-105 shadow-lg"
-              : "bg-blue-100 text-[#2870ff] hover:bg-[#2870ff] hover:text-white"
+              ? "bg-white text-[#2870ff] scale-105 shadow-lg"
+              : "bg-blue-100 text-[#2870ff] hover:bg-white hover:text-[#2870ff]"
           }`}
           onClick={() => setActiveTab("farmers")}
         >
@@ -146,8 +146,8 @@ export default function App() {
         <button
           className={`px-6 py-3 rounded-full font-semibold transition-all duration-300 shadow-md ${
             activeTab === "investors"
-              ? "bg-[#2870ff] text-white scale-105 shadow-lg"
-              : "bg-blue-100 text-[#2870ff] hover:bg-[#2870ff] hover:text-white"
+              ? "bg-white text-[#2870ff] scale-105 shadow-lg"
+              : "bg-blue-100 text-[#2870ff] hover:bg-white hover:text-[#2870ff]"
           }`}
           onClick={() => setActiveTab("investors")}
         >
