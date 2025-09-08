@@ -19,6 +19,7 @@ cleanup: `npx hardhat clean`
 - [x] basic frontend with buttons
 - [x] metamask integration into frontend
 - [x] smart contract: buying/investing
+- [ ] integrating sepolia testnet into hardhat project
 - [ ] deploying and calling smart contract, transactions
 - [ ] backend: calling smart contract payout
 - [ ] smart contract: getting data via chainlink, checking condition
