@@ -18,7 +18,7 @@ cleanup: `npx hardhat clean`
 
 - [x] basic frontend with buttons
 - [x] metamask integration into frontend
-- [ ] smart contract
+- [x] smart contract: buying/investing
 - [ ] deploying and calling smart contract, transactions
 - [ ] backend: calling smart contract payout
 - [ ] smart contract: getting data via chainlink, checking condition
