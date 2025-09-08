@@ -14,6 +14,9 @@ demo script: `npx hardhat run scripts/demo-rainy-day-fund.ts`
 deploy via ignition: `npx hardhat ignition deploy ignition/modules/RainyDayFund.ts --network hardhatOp`  
 cleanup: `npx hardhat clean`  
 
+or more easily:
+`python3 script.py`
+
 ## Roadmap
 
 - [x] basic frontend with buttons
