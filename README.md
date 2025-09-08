@@ -12,6 +12,7 @@ Hardhat: run `npx hardhat compile`.
 test: `npx hardhat test`
 demo script: `npx hardhat run scripts/demo-rainy-day-fund.ts`
 deploy via ignition: `npx hardhat ignition deploy ignition/modules/RainyDayFund.ts --network hardhatOp`
+cleanup: `npx hardhat clean`
 
 ## Roadmap
 
