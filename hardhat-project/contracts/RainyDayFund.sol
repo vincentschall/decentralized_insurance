@@ -125,7 +125,7 @@ contract RainyDayFund {
      */
     function buyPolicy(PolicyType _policyType) external validPolicyType(_policyType) returns (uint256 tokenId) {
         uint256 premiumAmount = premiums[_policyType];
-        require(usdc.balanceOf(msg.sender) >= premiumAmount, "Insufficient USDC");
+        require(usdc.balanceOf(msg.sender) >= premiumAmount, "Insufficient USDC balance");
         require(usdc.allowance(msg.sender, address(this)) >= premiumAmount, "Allowance too low");
 
         require(usdc.transferFrom(msg.sender, address(this), premiumAmount), "Transfer failed");
