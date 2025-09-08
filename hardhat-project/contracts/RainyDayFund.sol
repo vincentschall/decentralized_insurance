@@ -179,7 +179,7 @@ contract RainyDayFund {
     }
 
     /**
-     * @dev Batch payout (unchanged core logic, cleanup added on completion of policies)
+     * @dev Batch payout
      */
     function batchPayout(uint256 _maxProcess, uint256 _gasBuffer) external onlyOwner {
         require(_gasBuffer < 1000000, "Gas buffer too large");
