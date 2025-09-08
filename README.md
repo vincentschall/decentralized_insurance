@@ -6,7 +6,12 @@ Group project @University of Basel for The Blockchain Challenge.
 
 Install: npm, node, tailwindcss, metamask
 
-Run with `npm run dev`
+Run frontend with `npm run dev`
+
+Hardhat: run `npx hardhat compile`.
+test: `npx hardhat test`
+demo script: `npx hardhat run scripts/demo-rainy-day-fund.ts`
+deploy via ignition: `npx hardhat ignition deploy ignition/modules/RainyDayFund.ts --network hardhatOp`
 
 ## Roadmap
 
