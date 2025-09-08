@@ -8,7 +8,7 @@ def main():
         r".\node_modules\.bin\npx.cmd",
         "hardhat", "ignition", "deploy",
         "ignition/modules/RainyDayFund.ts",
-        "--network", "hardhatOp"
+        "--network", "sepolia"
     ]
 
     process = subprocess.run(cmd)
