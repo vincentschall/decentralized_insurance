@@ -14,8 +14,6 @@ contract MockUSDC {
     event Approval(address indexed owner, address indexed spender, uint256 value);
     
     constructor() {
-        // Mint initial supply to deployer
-        totalSupply = 1000000 * 10**6; // 1 million MUSDC
         balanceOf[msg.sender] = totalSupply;
         emit Transfer(address(0), msg.sender, totalSupply);
     }
