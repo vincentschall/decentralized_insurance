@@ -10,14 +10,14 @@ interface IERC20 {
 }
 
 contract RainyDayFund {
-    // Maximum gas per transaction (adjust based on network conditions)
-    uint256 public constant MAX_GAS_PER_BATCH = 5000000; // ~5M gas limit
-
     // USDC contract
     IERC20 public immutable usdc;
 
     // Owner of the contract
     address public owner;
+
+    // Premium farmers pay per policy token
+    uint256 public premium; 
 
     // Total risk pool balance in USDC
     uint256 public riskPoolBalance;
@@ -31,23 +31,6 @@ contract RainyDayFund {
     // Array to track users for payouts
     address[] private allFarmers;
     mapping(address => bool) private isFarmer;
-
-    // Last processed tokenId (monotonic)
-    uint256 public lastProcessedTokenId;
-
-    // Resume indices for batch processing
-    uint256 public lastFarmerIndex;
-    uint256 public lastTokenIndex;
-
-    // Policy types
-    enum PolicyType {
-        BASIC,      // 100 USDC premium
-        STANDARD,   // 250 USDC premium  
-        PREMIUM     // 500 USDC premium
-    }
-
-    // Policy pricing (USDC - 6 decimals)
-    mapping(PolicyType => uint256) public premiums;
 
     // Mapping for policies by tokenId (one policy per token)
     struct Policy {
@@ -72,8 +55,14 @@ contract RainyDayFund {
     event PolicyBoughtEvent(
         address indexed farmer,
         uint256 indexed tokenId,
-        PolicyType policyType,
         uint256 premium,
+        uint256 timestamp
+    );
+
+    event ClaimMadeEvent(
+        address indexed farmer,
+        uint256 indexed tokenId,
+        uint256 payoutAmount,
         uint256 timestamp
     );
 
@@ -92,17 +81,9 @@ contract RainyDayFund {
     event FarmerAdded(address indexed farmer, uint256 timestamp);
     event FarmerRemoved(address indexed farmer, uint256 timestamp);
 
-    event BatchProcessingStarted(uint256 maxProcess, uint256 timestamp);
-    event BatchProcessingCompleted(uint256 processed, uint256 gasUsed, uint256 timestamp);
-
     // Modifiers
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner");
-        _;
-    }
-
-    modifier validPolicyType(PolicyType _policyType) {
-        require(uint8(_policyType) <= 2, "Invalid policy type");
         _;
     }
 
@@ -110,51 +91,149 @@ contract RainyDayFund {
         owner = msg.sender;
         usdc = IERC20(_usdcAddress);
         tokenCounter = 1;
-        lastProcessedTokenId = 0;
-        lastFarmerIndex = 0;
-        lastTokenIndex = 0;
 
-        // Set premiums
-        premiums[PolicyType.BASIC] = 100 * 10**6;
-        premiums[PolicyType.STANDARD] = 250 * 10**6;
-        premiums[PolicyType.PREMIUM] = 500 * 10**6;
+        // Set premium per policy token
+        premium = 200 * 10**6; // 200 USDC per policy token
     }
 
     /**
-     * @dev Farmers buy policies
+     * @dev Farmers buy multiple policy tokens
+     * @param _amount Number of policy tokens to buy
      */
-    function buyPolicy(PolicyType _policyType) external validPolicyType(_policyType) returns (uint256 tokenId) {
-        uint256 premiumAmount = premiums[_policyType];
-        require(usdc.balanceOf(msg.sender) >= premiumAmount, "Insufficient USDC balance");
-        require(usdc.allowance(msg.sender, address(this)) >= premiumAmount, "Allowance too low");
+    function buyPolicy(uint256 _amount) external returns (uint256[] memory tokenIds) {
+        require(_amount > 0, "Amount must be greater than 0");
+        
+        uint256 totalPremium = premium * _amount;
+        require(usdc.balanceOf(msg.sender) >= totalPremium, "Insufficient USDC");
+        require(usdc.allowance(msg.sender, address(this)) >= totalPremium, "Allowance too low");
 
-        require(usdc.transferFrom(msg.sender, address(this), premiumAmount), "Transfer failed");
+        require(usdc.transferFrom(msg.sender, address(this), totalPremium), "Transfer failed");
 
-        tokenId = tokenCounter++;
-        tokenOwner[tokenId] = msg.sender;
-        farmerTokens[msg.sender].push(tokenId);
+        tokenIds = new uint256[](_amount);
 
+        // Add farmer to tracking if not already added
         if (!isFarmer[msg.sender]) {
             isFarmer[msg.sender] = true;
             allFarmers.push(msg.sender);
             emit FarmerAdded(msg.sender, block.timestamp);
         }
 
-        policies[tokenId] = Policy({
-            creationTimestamp: block.timestamp,
-            expirationTimestamp: block.timestamp + 30 days,
-            payoutAmount: premiumAmount * 2,
-            locationHash: keccak256(abi.encodePacked(msg.sender, tokenId)),
-            weatherData: 0,
-            weatherDataFetched: false,
-            payoutDone: false
-        });
+        // Create multiple policy tokens
+        for (uint256 i = 0; i < _amount; i++) {
+            uint256 tokenId = tokenCounter++;
+            tokenIds[i] = tokenId;
+            
+            tokenOwner[tokenId] = msg.sender;
+            farmerTokens[msg.sender].push(tokenId);
 
-        riskPoolBalance += premiumAmount;
+            policies[tokenId] = Policy({
+                creationTimestamp: block.timestamp,
+                expirationTimestamp: block.timestamp + 30 seconds,
+                payoutAmount: premium * 2, // 2x payout per token
+                locationHash: keccak256(abi.encodePacked(msg.sender, tokenId)),
+                weatherData: 0,
+                weatherDataFetched: false,
+                payoutDone: false
+            });
 
-        emit PolicyBoughtEvent(msg.sender, tokenId, _policyType, premiumAmount, block.timestamp);
+            emit PolicyBoughtEvent(msg.sender, tokenId, premium, block.timestamp);
+        }
 
-        return tokenId;
+        riskPoolBalance += totalPremium;
+
+        return tokenIds;
+    }
+
+    /**
+     * @dev Manual claim function for a specific policy token
+     * @param _tokenId The token ID to claim
+     */
+    function claim(uint256 _tokenId) external {
+        Policy storage policy = policies[_tokenId];
+        address policyHolder = tokenOwner[_tokenId];
+
+        require(msg.sender == policyHolder, "Not token owner");
+        require(policy.creationTimestamp != 0, "Policy not found");
+        require(block.timestamp > policy.expirationTimestamp, "Crop season not over");
+        require(policy.weatherDataFetched, "Weather data not available");
+        require(!policy.payoutDone, "Already paid");
+        require(checkChainLink(_tokenId), "Weather condition not met");
+        require(policy.weatherData < 10, "Weather condition not met for payout");
+        require(riskPoolBalance >= policy.payoutAmount, "Insufficient pool funds");
+
+        // Execute payout
+        require(usdc.transfer(policyHolder, policy.payoutAmount), "USDC payout failed");
+        riskPoolBalance -= policy.payoutAmount;
+        policy.payoutDone = true;
+
+        // Remove token from farmer's list
+        _removeTokenFromFarmer(policyHolder, _tokenId);
+
+        emit ClaimMadeEvent(policyHolder, _tokenId, policy.payoutAmount, block.timestamp);
+    }
+
+    /**
+     * @dev Claims all eligible policy tokens for the caller
+     */
+    function claimAll() external {
+        uint256[] storage tokens = farmerTokens[msg.sender];
+        require(tokens.length > 0, "No policies found");
+
+        uint256 totalPayout = 0;
+        uint256 successfulClaims = 0;
+
+        // Process claims in reverse order to handle array modifications
+        for (int256 i = int256(tokens.length) - 1; i >= 0; i--) {
+            uint256 tokenId = tokens[uint256(i)];
+            Policy storage policy = policies[tokenId];
+
+            // Check if this token is eligible for claim
+            if (!policy.payoutDone &&
+                policy.weatherDataFetched &&
+                block.timestamp > policy.expirationTimestamp &&
+                checkChainLink(tokenId) &&
+                policy.weatherData < 10 &&
+                riskPoolBalance >= policy.payoutAmount) {
+                
+                totalPayout += policy.payoutAmount;
+                riskPoolBalance -= policy.payoutAmount;
+                policy.payoutDone = true;
+                successfulClaims++;
+
+                // Remove token from array (swap with last and pop)
+                tokens[uint256(i)] = tokens[tokens.length - 1];
+                tokens.pop();
+
+                emit ClaimMadeEvent(msg.sender, tokenId, policy.payoutAmount, block.timestamp);
+            }
+        }
+
+        require(successfulClaims > 0, "No eligible claims found");
+        require(usdc.transfer(msg.sender, totalPayout), "USDC payout failed");
+
+        // Clean up farmer if no tokens remain
+        if (tokens.length == 0) {
+            _removeFarmer(msg.sender);
+        }
+    }
+
+    /**
+     * @dev Removes a specific token from farmer's token list
+     */
+    function _removeTokenFromFarmer(address farmer, uint256 tokenId) internal {
+        uint256[] storage tokens = farmerTokens[farmer];
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (tokens[i] == tokenId) {
+                tokens[i] = tokens[tokens.length - 1];
+                tokens.pop();
+                break;
+            }
+        }
+        
+        // Clean up farmer if no tokens remain
+        if (tokens.length == 0) {
+            _removeFarmer(farmer);
+        }
     }
 
     /**
@@ -179,109 +258,8 @@ contract RainyDayFund {
     }
 
     /**
-     * @dev Batch payout
+     * @dev Owner updates weather data for a policy
      */
-    function batchPayout(uint256 _maxProcess, uint256 _gasBuffer) external onlyOwner {
-        require(_gasBuffer < 1000000, "Gas buffer too large");
-
-        uint256 startGas = gasleft();
-        uint256 gasBuffer = _gasBuffer > 0 ? _gasBuffer : 200000;
-        uint256 maxProcess = _maxProcess > 0 ? _maxProcess :
-                            (MIN(MAX_GAS_PER_BATCH - gasBuffer, gasleft() - gasBuffer) / 50000);
-
-        emit BatchProcessingStarted(maxProcess, block.timestamp);
-
-        uint256 processed = 0;
-        uint256 farmersLength = allFarmers.length;
-
-        uint256 i = lastFarmerIndex;
-        uint256 j = lastTokenIndex;
-
-        uint256 gasUsed = 0;
-
-        for (; i < farmersLength && processed < maxProcess; ) {
-            address farmer = allFarmers[i];
-            uint256[] storage tokens = farmerTokens[farmer];
-            uint256 tokensLength = tokens.length;
-
-            for (; j < tokensLength && processed < maxProcess; ) {
-                uint256 tokenId = tokens[j];
-
-                if (tokenId > lastProcessedTokenId) {
-                    Policy storage policy = policies[tokenId];
-
-                    if (!policy.payoutDone &&
-                        policy.weatherDataFetched &&
-                        block.timestamp > policy.expirationTimestamp &&
-                        checkChainLink(tokenId) &&
-                        policy.weatherData < 10) {
-
-                        if (riskPoolBalance >= policy.payoutAmount) {
-                            require(usdc.transfer(farmer, policy.payoutAmount), "Transfer failed");
-                            riskPoolBalance -= policy.payoutAmount;
-                            policy.payoutDone = true;
-                            processed++;
-                            lastProcessedTokenId = tokenId;
-
-                            // Remove token from farmer's list
-                            tokens[j] = tokens[tokensLength - 1];
-                            tokens.pop();
-                            tokensLength--;
-
-                            // Cleanup farmer if no tokens remain
-                            if (tokensLength == 0) {
-                                _removeFarmer(farmer);
-                            }
-
-                            continue; // recheck current j (new token swapped in)
-                        } else {
-                            revert("Insufficient funds in risk pool");
-                        }
-                    }
-                }
-
-                j++;
-
-                if (gasleft() < gasBuffer) {
-                    lastFarmerIndex = i;
-                    lastTokenIndex = j;
-                    gasUsed = startGas - gasleft();
-                    emit BatchProcessingCompleted(processed, gasUsed, block.timestamp);
-                    return;
-                }
-            }
-
-            i++;
-            j = 0;
-        }
-
-        lastFarmerIndex = 0;
-        lastTokenIndex = 0;
-        gasUsed = startGas - gasleft();
-        emit BatchProcessingCompleted(processed, gasUsed, block.timestamp);
-    }
-
-    function resetBatchProcessing() external onlyOwner {
-        lastProcessedTokenId = 0;
-        lastFarmerIndex = 0;
-        lastTokenIndex = 0;
-    }
-
-    function getBatchStatus() external view returns (uint256 lastProcessed, uint256 remainingTokens, uint256 resumeFarmerIndex, uint256 resumeTokenIndex) {
-        uint256 totalTokens = tokenCounter - 1;
-        uint256 processed = lastProcessedTokenId;
-        uint256 remaining = totalTokens > processed ? (totalTokens - processed) : 0;
-        return (processed, remaining, lastFarmerIndex, lastTokenIndex);
-    }
-
-    function MIN(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a < b ? a : b;
-    }
-
-    function checkChainLink(uint256 _tokenId) internal view returns (bool conditionMet) {
-        return ((block.timestamp + _tokenId) % 2) == 0;
-    }
-
     function updateWeatherData(uint256 _tokenId, uint256 _rainfall) external onlyOwner {
         Policy storage policy = policies[_tokenId];
         require(policy.creationTimestamp != 0, "Policy not found");
@@ -290,35 +268,26 @@ contract RainyDayFund {
         policy.weatherDataFetched = true;
     }
 
-    function payout(uint256 _tokenId) external {
-        Policy storage policy = policies[_tokenId];
-        address policyHolder = tokenOwner[_tokenId];
-
-        require(policy.creationTimestamp != 0, "Policy not found");
-        require(block.timestamp > policy.expirationTimestamp, "Crop season not over");
-        require(policy.weatherDataFetched, "Weather data not available");
-        require(!policy.payoutDone, "Already paid");
-        require(checkChainLink(_tokenId), "Weather condition not met");
-        require(riskPoolBalance >= policy.payoutAmount, "Insufficient pool funds");
-
-        if (policy.weatherData < 10) {
-            require(usdc.transfer(policyHolder, policy.payoutAmount), "USDC payout failed");
-            riskPoolBalance -= policy.payoutAmount;
-            policy.payoutDone = true;
-
-            // Remove token from farmer
-            uint256[] storage tokens = farmerTokens[policyHolder];
-            for (uint256 i = 0; i < tokens.length; i++) {
-                if (tokens[i] == _tokenId) {
-                    tokens[i] = tokens[tokens.length - 1];
-                    tokens.pop();
-                    break;
-                }
-            }
-            if (tokens.length == 0) {
-                _removeFarmer(policyHolder);
-            }
+    /**
+     * @dev Batch update weather data for multiple policies
+     */
+    function batchUpdateWeatherData(uint256[] calldata _tokenIds, uint256[] calldata _rainfallData) external onlyOwner {
+        require(_tokenIds.length == _rainfallData.length, "Arrays length mismatch");
+        
+        for (uint256 i = 0; i < _tokenIds.length; i++) {
+            Policy storage policy = policies[_tokenIds[i]];
+            require(policy.creationTimestamp != 0, "Policy not found");
+            require(!policy.weatherDataFetched, "Already fetched");
+            policy.weatherData = _rainfallData[i];
+            policy.weatherDataFetched = true;
         }
+    }
+
+    /**
+     * @dev Mock chainlink check (replace with actual oracle integration)
+     */
+    function checkChainLink(uint256 _tokenId) internal view returns (bool conditionMet) {
+        return ((block.timestamp + _tokenId) % 2) == 0;
     }
 
     // ---------------- Investor logic ----------------
@@ -352,14 +321,40 @@ contract RainyDayFund {
         emit InvestmentWithdrawnEvent(msg.sender, withdrawAmount, block.timestamp);
     }
 
-    // ---------------- Getters ----------------
+    // ---------------- View Functions ----------------
 
     function getFarmerTokens(address _farmer) external view returns (uint256[] memory) {
         return farmerTokens[_farmer];
     }
 
-    function getPolicyPricing(PolicyType _policyType) external view validPolicyType(_policyType) returns (uint256 premium) {
-        return premiums[_policyType];
+    function getClaimableTokens(address _farmer) external view returns (uint256[] memory claimableTokens, uint256 totalClaimAmount) {
+        uint256[] memory tokens = farmerTokens[_farmer];
+        uint256[] memory tempClaimable = new uint256[](tokens.length);
+        uint256 claimableCount = 0;
+        uint256 totalAmount = 0;
+
+        for (uint256 i = 0; i < tokens.length; i++) {
+            uint256 tokenId = tokens[i];
+            Policy storage policy = policies[tokenId];
+
+            if (!policy.payoutDone &&
+                policy.weatherDataFetched &&
+                block.timestamp > policy.expirationTimestamp &&
+                checkChainLink(tokenId) &&
+                policy.weatherData < 10) {
+                
+                tempClaimable[claimableCount] = tokenId;
+                totalAmount += policy.payoutAmount;
+                claimableCount++;
+            }
+        }
+
+        claimableTokens = new uint256[](claimableCount);
+        for (uint256 i = 0; i < claimableCount; i++) {
+            claimableTokens[i] = tempClaimable[i];
+        }
+
+        return (claimableTokens, totalAmount);
     }
 
     function tokenExists(uint256 _tokenId) external view returns (bool) {
@@ -379,11 +374,15 @@ contract RainyDayFund {
         return usdc.balanceOf(address(this));
     }
 
-    function getUserInvestments(address _investor) external view returns (uint256) {
+    function getUserInvestment(address _investor) external view returns (uint256) {
         return investorShares[_investor];
     }
 
     function getUSDCAddress() external view returns (address) {
         return address(usdc);
+    }
+
+    function getAllFarmers() external view returns (address[] memory) {
+        return allFarmers;
     }
 }
