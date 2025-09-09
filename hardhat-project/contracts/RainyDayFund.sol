@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
@@ -18,191 +22,219 @@ interface AggregatorV3Interface {
     );
 }
 
-contract RainyDayFund {
+contract RainyDayFund is ERC1155, Ownable, ReentrancyGuard {
     IERC20 public immutable usdc;
-    address public owner;
     
     // Risk pool tracking
     uint256 public riskPoolBalance;
     uint256 public totalInvestorFunds;
     mapping(address => uint256) public investorShares;
     
-    // Policy tracking
-    uint256 private tokenCounter;
-
+    // Policy tracking - now using token IDs based on seasons
+    uint256 public currentSeasonId;
+    
     // Season tracking
-    uint256 public seasonOverTimeStamp = 60 days;
+    uint256 public seasonOverTimeStamp;
     uint256 constant timeUnit = 30 days;
 
-    // Policy structure for minimal data storage
-    struct Policy {
+    // Policy structure for each season
+    struct SeasonPolicy {
         uint256 creationTimestamp;
         uint256 payoutAmount;
+        uint256 premium;
         uint256 weatherData;
         bool weatherDataFetched;
-        bool payoutDone;
+        bool payoutEnabled;
+        bool seasonActive;
     }
-    mapping(uint256 => Policy) public policies;
-    mapping(uint256 => address) public tokenOwner;
-    mapping(address => uint256[]) public farmerTokens;
     
-    // Weather oracle placeholder
+    mapping(uint256 => SeasonPolicy) public seasonPolicies;
+    
+    // Track individual policy claims (prevents double claiming)
+    mapping(address => mapping(uint256 => uint256)) public claimedPolicies;
+    
+    // Weather oracle
     AggregatorV3Interface internal weatherFeed;
     bool public useChainlinkOracle = false;
     
     // Events
-    event PolicyBought(address indexed farmer, uint256[] tokenIds, uint256 totalPremium);
-    event ClaimMade(address indexed farmer, uint256 totalPayout, uint256 tokenCount);
+    event PolicyBought(address indexed farmer, uint256 seasonId, uint256 amount, uint256 totalPremium);
+    event ClaimMade(address indexed farmer, uint256 seasonId, uint256 amount, uint256 totalPayout);
     event InvestmentMade(address indexed investor, uint256 amount);
     event InvestmentWithdrawn(address indexed investor, uint256 amount);
-    event WeatherDataUpdated(uint256[] tokenIds, uint256[] weatherData);
+    event WeatherDataUpdated(uint256 seasonId, uint256 weatherData);
+    event NewSeasonStarted(uint256 seasonId, uint256 premium, uint256 payoutAmount);
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner");
-        _;
+    constructor(address _usdcAddress) 
+        ERC1155("") // Can be used to display metadata later, not used yet! 
+        Ownable(msg.sender) 
+    {
+        usdc = IERC20(_usdcAddress);
+        currentSeasonId = 1;
+        _initializeSeason(currentSeasonId);
+        seasonOverTimeStamp = block.timestamp + 60 days;
     }
 
-    constructor(address _usdcAddress) {
-        owner = msg.sender;
-        usdc = IERC20(_usdcAddress);
-        tokenCounter = 1;
+    /**
+     * @dev Initialize a new season with policy parameters
+     */
+    function _initializeSeason(uint256 seasonId) internal {
+        uint256 premium = getCurrentPremium();
+        seasonPolicies[seasonId] = SeasonPolicy({
+            creationTimestamp: block.timestamp,
+            payoutAmount: premium * 2, // 2x payout
+            premium: premium,
+            weatherData: 0,
+            weatherDataFetched: false,
+            payoutEnabled: false,
+            seasonActive: true
+        });
+        
+        emit NewSeasonStarted(seasonId, premium, premium * 2);
+    }
+
+    /**
+     * @dev Start a new season (only owner)
+     */
+    function startNewSeason() external onlyOwner {
+        // End current season
+        seasonPolicies[currentSeasonId].seasonActive = false;
+        
+        // Start new season
+        currentSeasonId++;
+        seasonOverTimeStamp = block.timestamp + 60 days;
+        _initializeSeason(currentSeasonId);
     }
 
     /**
      * @dev Calculate current premium based on supply/demand
-     * TODO: Implement actual supply/demand pricing algorithm
      */
     function getCurrentPremium() public pure returns (uint256) {
         // Placeholder: Return base premium of 200 USDC
-        // Future: Calculate based on pool utilization, recent claims, etc.
         return 200 * 10**6; // 200 USDC
     }
 
     /**
-     * @dev Buy multiple insurance policies
+     * @dev Buy insurance policies as ERC-1155 tokens
      */
-    function buyPolicy(uint256 _amount) external returns (uint256[] memory tokenIds) {
+    function buyPolicy(uint256 _amount) external nonReentrant returns (uint256 seasonId) {
         require(_amount > 0, "Amount must be > 0");
-        require(block.timestamp < (seasonOverTimeStamp - timeUnit), "Policy not available anymore");
+        require(block.timestamp < (seasonOverTimeStamp - timeUnit), "Policy sales ended");
+        require(seasonPolicies[currentSeasonId].seasonActive, "Season not active");
         
-        uint256 premium = getCurrentPremium();
-        uint256 totalPremium = premium * _amount;
+        SeasonPolicy storage policy = seasonPolicies[currentSeasonId];
+        uint256 totalPremium = policy.premium * _amount;
         
         require(usdc.transferFrom(msg.sender, address(this), totalPremium), "Transfer failed");
 
-        tokenIds = new uint256[](_amount);
-
-        for (uint256 i = 0; i < _amount; i++) {
-            uint256 tokenId = tokenCounter++;
-            tokenIds[i] = tokenId;
-            
-            tokenOwner[tokenId] = msg.sender;
-            farmerTokens[msg.sender].push(tokenId);
-
-            policies[tokenId] = Policy({
-                creationTimestamp: block.timestamp,
-                payoutAmount: premium * 2, // 2x payout -> placeholder
-                weatherData: 0,
-                weatherDataFetched: false,
-                payoutDone: false
-            });
-        }
+        // Mint ERC-1155 tokens representing the policies
+        _mint(msg.sender, currentSeasonId, _amount, "");
 
         riskPoolBalance += totalPremium;
-        emit PolicyBought(msg.sender, tokenIds, totalPremium);
+        emit PolicyBought(msg.sender, currentSeasonId, _amount, totalPremium);
         
-        return tokenIds;
+        return currentSeasonId;
     }
 
     /**
-     * @dev Claim all eligible policies for the caller
+     * @dev Batch claim all eligible policies across multiple seasons
      */
-    function claimAll() external {
-        uint256[] storage tokens = farmerTokens[msg.sender];
-        require(tokens.length > 0, "No policies found");
-
+    function claimAll() external nonReentrant {
         uint256 totalPayout = 0;
-        uint256 claimedCount = 0;
-
-        // Process claims in reverse order for safe array modification
-        for (int256 i = int256(tokens.length) - 1; i >= 0; i--) {
-            uint256 tokenId = tokens[uint256(i)];
-            Policy storage policy = policies[tokenId];
-
-            if (_isPolicyClaimable(tokenId)) {
-                totalPayout += policy.payoutAmount;
-                riskPoolBalance -= policy.payoutAmount;
-                policy.payoutDone = true;
-                claimedCount++;
-
-                // Remove token from array
-                tokens[uint256(i)] = tokens[tokens.length - 1];
-                tokens.pop();
+        uint256 totalClaimed = 0;
+        
+        // Check all seasons where user has policies
+        for (uint256 seasonId = 1; seasonId <= currentSeasonId; seasonId++) {
+            uint256 userBalance = balanceOf(msg.sender, seasonId);
+            if (userBalance > 0 && _isPolicyClaimable(seasonId)) {
+                SeasonPolicy storage policy = seasonPolicies[seasonId];
+                uint256 seasonPayout = policy.payoutAmount * userBalance;
+                
+                if (seasonPayout <= riskPoolBalance - totalPayout) {
+                    totalPayout += seasonPayout;
+                    totalClaimed += userBalance;
+                    
+                    // Update claimed amount
+                    claimedPolicies[msg.sender][seasonId] += userBalance;
+                    
+                    // Burn the tokens
+                    _burn(msg.sender, seasonId, userBalance);
+                    
+                    emit ClaimMade(msg.sender, seasonId, userBalance, seasonPayout);
+                }
             }
         }
-
-        require(claimedCount > 0, "No eligible claims");
-        require(totalPayout <= riskPoolBalance, "Insufficient pool funds");
+        
+        require(totalClaimed > 0, "No eligible claims");
+        riskPoolBalance -= totalPayout;
         require(usdc.transfer(msg.sender, totalPayout), "Payout failed");
-
-        emit ClaimMade(msg.sender, totalPayout, claimedCount);
     }
 
     /**
-     * @dev Check if a policy is claimable
+     * @dev Check if policies from a season are claimable
      */
-    function _isPolicyClaimable(uint256 tokenId) internal view returns (bool) {
-        Policy storage policy = policies[tokenId];
-        return (!policy.payoutDone &&
-                policy.weatherDataFetched &&
+    function _isPolicyClaimable(uint256 seasonId) internal view returns (bool) {
+        SeasonPolicy storage policy = seasonPolicies[seasonId];
+        return (policy.payoutEnabled &&
                 block.timestamp > seasonOverTimeStamp &&
                 block.timestamp < (seasonOverTimeStamp + timeUnit) &&
-                _getWeatherCondition(tokenId) &&
-                policy.weatherData < 10);
+                checkWeatherCondition(policy.weatherDataFetched, policy.weatherData));
     }
 
     /**
-     * @dev Weather condition check - placeholder for Chainlink integration
+     * @dev Check weather condition for a season, 
+     * for now simply checking manually set values for testing purposes, later include chainlink
      */
-    function _getWeatherCondition(uint256 tokenId) internal view returns (bool) {
+    function checkWeatherCondition(bool weatherDataFetched, uint256 weatherData) internal view returns (bool) {
         if (useChainlinkOracle && address(weatherFeed) != address(0)) {
             // TODO: Implement actual Chainlink weather data fetching
-            // (, int256 price,,,) = weatherFeed.latestRoundData();
-            // return uint256(price) < 10;
             return true; // Placeholder
         } else {
-            // Mock condition for testing
-            return ((block.timestamp + tokenId) % 2) == 0;
+            return 
+                weatherDataFetched && 
+                weatherData < 10;
         }
     }
 
-    /**
-     * @dev Owner updates weather data (for testing phase)
+     /**
+     * @dev Owner updates weather data for a season
      */
-    function updateWeatherData(uint256[] calldata tokenIds, uint256[] calldata weatherData) external onlyOwner {
-        require(tokenIds.length == weatherData.length, "Array length mismatch");
+    function updateWeatherData(uint256 seasonId, uint256 weatherData) external onlyOwner {
+        require(seasonId <= currentSeasonId, "Season doesn't exist");
+        SeasonPolicy storage policy = seasonPolicies[seasonId];
+        policy.weatherData = weatherData;
+        policy.weatherDataFetched = true;
+        policy.payoutEnabled = true;
         
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            Policy storage policy = policies[tokenIds[i]];
-            require(policy.creationTimestamp != 0, "Policy not found");
-            policy.weatherData = weatherData[i];
-            policy.weatherDataFetched = true;
-        }
-        
-        emit WeatherDataUpdated(tokenIds, weatherData);
+        emit WeatherDataUpdated(seasonId, weatherData);
     }
 
     /**
-     * @dev Set Chainlink oracle address (for production)
+     * @dev Set Chainlink oracle address and enable/disable oracle usage
+     * @param _oracleAddress Address of the Chainlink weather oracle (can be zero to disable)
+     * @param _useChainlink Whether to use Chainlink oracle or manual weather data
      */
     function setWeatherOracle(address _oracleAddress, bool _useChainlink) external onlyOwner {
+        if (_useChainlink) {
+            require(_oracleAddress != address(0), "Oracle address cannot be zero when enabling Chainlink");
+        }
+        
         weatherFeed = AggregatorV3Interface(_oracleAddress);
         useChainlinkOracle = _useChainlink;
+        
+        // If switching to Chainlink, enable payouts for seasons that have been processed manually
+        if (_useChainlink) {
+            for (uint256 i = 1; i <= currentSeasonId; i++) {
+                if (!seasonPolicies[i].seasonActive && seasonPolicies[i].weatherDataFetched) {
+                    seasonPolicies[i].payoutEnabled = true;
+                }
+            }
+        }
     }
 
     // ================== INVESTOR FUNCTIONS ==================
 
-    function invest(uint256 amount) external {
+    function invest(uint256 amount) external nonReentrant {
         require(amount > 0, "Amount must be > 0");
         require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
 
@@ -213,18 +245,19 @@ contract RainyDayFund {
         emit InvestmentMade(msg.sender, amount);
     }
 
-    /**
-     * @dev Withdraw funds from the risk pool after the season is over and 60 days have passed until 90 days after season end
-     */
-    function withdraw() external {
+    function withdraw() external nonReentrant {
         require(
-                block.timestamp > (seasonOverTimeStamp + 2 * timeUnit) &&
-                block.timestamp < (seasonOverTimeStamp + 3 * timeUnit) );
+            block.timestamp > (seasonOverTimeStamp + 2 * timeUnit) &&
+            block.timestamp < (seasonOverTimeStamp + 3 * timeUnit),
+            "Withdrawal period not active"
+        );
 
-        uint256 shareAmount = investorShares[msg.sender]; 
+        uint256 shareAmount = investorShares[msg.sender];
+        require(shareAmount > 0, "No investment found");
+        
         uint256 withdrawAmount = (shareAmount * riskPoolBalance) / totalInvestorFunds;
         
-        investorShares[msg.sender] -= 0;
+        investorShares[msg.sender] = 0; // Fixed: was -= 0
         totalInvestorFunds -= shareAmount;
         riskPoolBalance -= withdrawAmount;
 
@@ -234,35 +267,56 @@ contract RainyDayFund {
 
     // ================== VIEW FUNCTIONS ==================
 
-    function getFarmerTokens(address farmer) external view returns (uint256[] memory) {
-        return farmerTokens[farmer];
+    function getPolicyInfo(uint256 seasonId) external view returns (SeasonPolicy memory) {
+        return seasonPolicies[seasonId];
     }
 
-    function getClaimableInfo(address farmer) external view returns (uint256[] memory claimableTokens, uint256 totalClaimAmount) {
-        uint256[] memory tokens = farmerTokens[farmer];
-        uint256[] memory tempClaimable = new uint256[](tokens.length);
-        uint256 claimableCount = 0;
-        uint256 totalAmount = 0;
+    function getUserPolicies(address user) external view returns (uint256[] memory seasonIds, uint256[] memory amounts) {
+        uint256[] memory tempSeasonIds = new uint256[](currentSeasonId);
+        uint256[] memory tempAmounts = new uint256[](currentSeasonId);
+        uint256 count = 0;
 
-        for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 tokenId = tokens[i];
-            if (_isPolicyClaimable(tokenId)) {
-                tempClaimable[claimableCount] = tokenId;
-                totalAmount += policies[tokenId].payoutAmount;
-                claimableCount++;
+        for (uint256 i = 1; i <= currentSeasonId; i++) {
+            uint256 balance = balanceOf(user, i);
+            if (balance > 0) {
+                tempSeasonIds[count] = i;
+                tempAmounts[count] = balance;
+                count++;
             }
         }
 
-        claimableTokens = new uint256[](claimableCount);
-        for (uint256 i = 0; i < claimableCount; i++) {
-            claimableTokens[i] = tempClaimable[i];
+        seasonIds = new uint256[](count);
+        amounts = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            seasonIds[i] = tempSeasonIds[i];
+            amounts[i] = tempAmounts[i];
         }
-
-        return (claimableTokens, totalAmount);
     }
 
-    function getTotalPolicies() external view returns (uint256) {
-        return tokenCounter - 1;
+    function getClaimableInfo(address user) external view returns (uint256[] memory seasonIds, uint256[] memory amounts, uint256 totalClaimAmount) {
+        uint256[] memory tempSeasonIds = new uint256[](currentSeasonId);
+        uint256[] memory tempAmounts = new uint256[](currentSeasonId);
+        uint256 count = 0;
+        uint256 totalAmount = 0;
+
+        for (uint256 i = 1; i <= currentSeasonId; i++) {
+            uint256 balance = balanceOf(user, i);
+            if (balance > 0 && _isPolicyClaimable(i)) {
+                tempSeasonIds[count] = i;
+                tempAmounts[count] = balance;
+                totalAmount += seasonPolicies[i].payoutAmount * balance;
+                count++;
+            }
+        }
+
+        seasonIds = new uint256[](count);
+        amounts = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            seasonIds[i] = tempSeasonIds[i];
+            amounts[i] = tempAmounts[i];
+        }
+
+        return (seasonIds, amounts, totalAmount);
     }
 
     function getContractBalance() external view returns (uint256) {
@@ -271,5 +325,17 @@ contract RainyDayFund {
 
     function getUserInvestment(address investor) external view returns (uint256) {
         return investorShares[investor];
+    }
+
+    /**
+     * @dev Override required by Solidity for multiple inheritance
+     */
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(ERC1155)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
     }
 }
