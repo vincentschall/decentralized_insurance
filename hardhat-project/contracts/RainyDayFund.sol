@@ -29,9 +29,14 @@ contract RainyDayFund {
     
     // Policy tracking
     uint256 private tokenCounter;
+
+    // Season tracking
+    uint256 public seasonOverTimeStamp = 60 days;
+    uint256 constant timeUnit = 30 days;
+
+    // Policy structure for minimal data storage
     struct Policy {
         uint256 creationTimestamp;
-        uint256 expirationTimestamp;
         uint256 payoutAmount;
         uint256 weatherData;
         bool weatherDataFetched;
@@ -78,6 +83,7 @@ contract RainyDayFund {
      */
     function buyPolicy(uint256 _amount) external returns (uint256[] memory tokenIds) {
         require(_amount > 0, "Amount must be > 0");
+        require(block.timestamp < (seasonOverTimeStamp - timeUnit), "Policy not available anymore");
         
         uint256 premium = getCurrentPremium();
         uint256 totalPremium = premium * _amount;
@@ -95,8 +101,7 @@ contract RainyDayFund {
 
             policies[tokenId] = Policy({
                 creationTimestamp: block.timestamp,
-                expirationTimestamp: block.timestamp + 30 days, // Realistic timeframe
-                payoutAmount: premium * 2, // 2x payout
+                payoutAmount: premium * 2, // 2x payout -> placeholder
                 weatherData: 0,
                 weatherDataFetched: false,
                 payoutDone: false
@@ -150,7 +155,8 @@ contract RainyDayFund {
         Policy storage policy = policies[tokenId];
         return (!policy.payoutDone &&
                 policy.weatherDataFetched &&
-                block.timestamp > policy.expirationTimestamp &&
+                block.timestamp > seasonOverTimeStamp &&
+                block.timestamp < (seasonOverTimeStamp + timeUnit) &&
                 _getWeatherCondition(tokenId) &&
                 policy.weatherData < 10);
     }
@@ -207,12 +213,18 @@ contract RainyDayFund {
         emit InvestmentMade(msg.sender, amount);
     }
 
-    function withdrawInvestment(uint256 shareAmount) external {
-        require(shareAmount > 0 && investorShares[msg.sender] >= shareAmount, "Invalid amount");
-        
+    /**
+     * @dev Withdraw funds from the risk pool after the season is over and 60 days have passed until 90 days after season end
+     */
+    function withdraw() external {
+        require(
+                block.timestamp > (seasonOverTimeStamp + 2 * timeUnit) &&
+                block.timestamp < (seasonOverTimeStamp + 3 * timeUnit) );
+
+        uint256 shareAmount = investorShares[msg.sender]; 
         uint256 withdrawAmount = (shareAmount * riskPoolBalance) / totalInvestorFunds;
         
-        investorShares[msg.sender] -= shareAmount;
+        investorShares[msg.sender] -= 0;
         totalInvestorFunds -= shareAmount;
         riskPoolBalance -= withdrawAmount;
 
