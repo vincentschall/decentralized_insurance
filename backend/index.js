@@ -9,11 +9,16 @@ const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
 const app = express();
 
-app.get('/', (req, res) => {
-  res.send('Hello from Node.js server!')
+app.get("/balance", async (req, res) => {
+  try {
+    const balance = await provider.getBalance(wallet.address);
+    res.send(`Balance of ${wallet.address}: ${ethers.formatEther(balance)} SepoliaETH`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error fetching balance");
+  }
 });
-
 const port = 3000;
 app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+console.log(`Server listening on port ${port}`);
 });
