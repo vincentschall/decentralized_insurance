@@ -3,7 +3,6 @@ import * as dotenv from "dotenv";
 dotenv.config();
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
 import { configVariable } from "hardhat/config";
-import 'solidity-docgen';
 
 const config: HardhatUserConfig = {
   plugins: [hardhatToolboxViemPlugin],
