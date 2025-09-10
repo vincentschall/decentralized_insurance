@@ -1,4 +1,11 @@
-const express = require('express');
+import { ethers } from "ethers";
+import express from "express";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
 const app = express();
 
