@@ -23,16 +23,17 @@ contract RainyDayFund is ERC4626, Ownable, ReentrancyGuard {
     uint256 public currentSeasonId;
     uint256 public seasonOverTimeStamp;
     uint256 constant timeUnit = 1 minutes; // short for demo
+    uint256 premium = 9 * 10**6; // 9 USDC
 
     AggregatorV3Interface public weatherFeed;
+
+    enum SeasonState { ACTIVE, CLAIM, WITHDRAW, FINISHED }
 
     struct SeasonPolicy {
         uint256 creationTimestamp;
         uint256 payoutAmount;
         uint256 premium;
         uint256 totalPoliciesSold;
-        bool payoutEnabled;
-        bool seasonActive;
         ERC20 policyToken;
     }
 
@@ -42,7 +43,6 @@ contract RainyDayFund is ERC4626, Ownable, ReentrancyGuard {
     event ClaimMade(address indexed farmer, uint256 seasonId, uint256 amount, uint256 totalPayout);
     event InvestmentMade(address indexed investor, uint256 amount);
     event InvestmentWithdrawn(address indexed investor, uint256 amount);
-    event WeatherDataUpdated(uint256 seasonId, uint256 weatherData);
     event NewSeasonStarted(uint256 seasonId, uint256 premium, uint256 payoutAmount);
 
     constructor(address _usdcAddress, address _weatherOracle)
@@ -62,8 +62,6 @@ contract RainyDayFund is ERC4626, Ownable, ReentrancyGuard {
     }
 
     function _initializeSeason(uint256 seasonId) internal {
-        uint256 premium = 200 * 10**6; // 200 USDC
-
         SeasonPolicyToken policyToken = new SeasonPolicyToken(
             string(abi.encodePacked("RainyDay Policy Season ", _toString(seasonId))),
             string(abi.encodePacked("RDP", _toString(seasonId))),
@@ -75,27 +73,41 @@ contract RainyDayFund is ERC4626, Ownable, ReentrancyGuard {
             payoutAmount: premium * 2,
             premium: premium,
             totalPoliciesSold: 0,
-            payoutEnabled: true,
-            seasonActive: true,
             policyToken: policyToken
         });
 
         emit NewSeasonStarted(seasonId, premium, premium * 2);
     }
 
-    function startNewSeason() external onlyOwner {
-        seasonPolicies[currentSeasonId].seasonActive = false;
+    function getSeasonState() public view returns (SeasonState) {
+        if (block.timestamp < seasonOverTimeStamp) {
+            return SeasonState.ACTIVE;
+        } else if (block.timestamp < seasonOverTimeStamp + timeUnit) {
+            return SeasonState.CLAIM;
+        } else if (block.timestamp < seasonOverTimeStamp + 2 * timeUnit) {
+            return SeasonState.WITHDRAW;
+        } else {
+            return SeasonState.FINISHED;
+        }
+    }
+
+    modifier onlyAfterFullSeasonCycle() {
+        require(getSeasonState() == SeasonState.FINISHED, "Season not fully finished yet");
+        _;
+    }
+
+    function startNewSeason(uint256 _premium) external onlyOwner onlyAfterFullSeasonCycle {
         currentSeasonId++;
+        premium = _premium;
         seasonOverTimeStamp = block.timestamp + 2 * timeUnit;
         _initializeSeason(currentSeasonId);
     }
 
     function buyPolicy(uint256 _amount) external nonReentrant returns (uint256 seasonId) {
         require(_amount > 0, "Amount > 0");
-        require(block.timestamp < seasonOverTimeStamp - timeUnit, "Policy sales ended");
+        require(getSeasonState() == SeasonState.ACTIVE, "Not in active period");
 
         SeasonPolicy storage policy = seasonPolicies[currentSeasonId];
-        require(policy.seasonActive, "Season not active");
 
         uint256 totalPremium = policy.premium * _amount;
         require(usdc.transferFrom(msg.sender, address(this), totalPremium), "Transfer failed");
@@ -107,13 +119,16 @@ contract RainyDayFund is ERC4626, Ownable, ReentrancyGuard {
         return currentSeasonId;
     }
 
-    function claimPolicies(uint256 seasonId, uint256 amount) external nonReentrant {
-        require(amount > 0, "Amount > 0");
-        require(_isPolicyClaimable(seasonId), "Policy not claimable");
+    function claimPolicies() external nonReentrant {
+        require(getSeasonState() == SeasonState.CLAIM, "Not in claim period");
 
-        SeasonPolicy storage policy = seasonPolicies[seasonId];
+        SeasonPolicy storage policy = seasonPolicies[currentSeasonId];
         SeasonPolicyToken token = SeasonPolicyToken(address(policy.policyToken));
-        require(token.balanceOf(msg.sender) >= amount, "Insufficient policy tokens");
+        uint256 amount = token.balanceOf(msg.sender);
+        require(amount > 0, "No policies to claim");
+
+        (,int256 weather,) = getWeatherData();
+        require(uint256(weather) < 10, "Weather not bad enough");
 
         uint256 totalPayout = policy.payoutAmount * amount;
         require(usdc.balanceOf(address(this)) >= totalPayout, "Insufficient funds");
@@ -121,16 +136,7 @@ contract RainyDayFund is ERC4626, Ownable, ReentrancyGuard {
         token.burnFrom(msg.sender, amount);
         require(usdc.transfer(msg.sender, totalPayout), "Payout failed");
 
-        emit ClaimMade(msg.sender, seasonId, amount, totalPayout);
-    }
-
-    function _isPolicyClaimable(uint256 seasonId) internal view returns (bool) {
-        SeasonPolicy storage policy = seasonPolicies[seasonId];
-        if (!policy.seasonActive && policy.payoutEnabled) {
-            (,int256 weather,) = getWeatherData();
-            return uint256(weather) < 10;
-        }
-        return false;
+        emit ClaimMade(msg.sender, currentSeasonId, amount, totalPayout);
     }
 
     function getWeatherData() public view returns (uint80 roundId, int256 weather, uint256 timestamp) {
@@ -145,14 +151,9 @@ contract RainyDayFund is ERC4626, Ownable, ReentrancyGuard {
     }
 
     function redeemShares(uint256 shares) external nonReentrant {
-        require(_isWithdrawalPeriodActive(), "Withdrawal period not active");
+        require(getSeasonState() == SeasonState.WITHDRAW, "Not in withdrawal period");
         uint256 assets = redeem(shares, msg.sender, msg.sender);
         emit InvestmentWithdrawn(msg.sender, assets);
-    }
-
-    function _isWithdrawalPeriodActive() internal view returns (bool) {
-        return block.timestamp > seasonOverTimeStamp + timeUnit &&
-               block.timestamp < seasonOverTimeStamp + 2 * timeUnit;
     }
 
     function totalAssets() public view override returns (uint256) {
